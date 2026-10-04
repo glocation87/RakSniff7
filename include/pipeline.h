@@ -16,6 +16,7 @@ typedef struct {
     uint64_t rate_last_count;
     double rate_last_time;
     bool show_rate;
+    char grep[128];
     FILE *log_file;
     ConnectionTable connections;
 } ViewerState;

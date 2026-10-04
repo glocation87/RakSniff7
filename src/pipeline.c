@@ -55,6 +55,30 @@ static void strip_ansi(const char *in, char *out, size_t out_size) {
     out[j] = '\0';
 }
 
+static char line_buf[8192];
+static size_t line_pos = 0;
+
+static bool line_matches_grep(ViewerState *vs) {
+    if (!vs->grep[0]) return true;
+    char plain[8192];
+    strip_ansi(line_buf, plain, sizeof(plain));
+    return strstr(plain, vs->grep) != NULL;
+}
+
+static void line_flush(ViewerState *vs) {
+    if (line_pos == 0) return;
+    line_buf[line_pos] = '\0';
+    if (line_matches_grep(vs)) {
+        fputs(line_buf, stdout);
+        if (vs->log_file) {
+            char plain[8192];
+            strip_ansi(line_buf, plain, sizeof(plain));
+            fputs(plain, vs->log_file);
+        }
+    }
+    line_pos = 0;
+}
+
 static void out_printf(ViewerState *vs, const char *fmt, ...) {
     char buf[2048];
     va_list ap;
@@ -62,11 +86,13 @@ static void out_printf(ViewerState *vs, const char *fmt, ...) {
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
 
-    fputs(buf, stdout);
-    if (vs->log_file) {
-        char plain[2048];
-        strip_ansi(buf, plain, sizeof(plain));
-        fputs(plain, vs->log_file);
+    for (size_t i = 0; buf[i]; i++) {
+        if (line_pos < sizeof(line_buf) - 1) {
+            line_buf[line_pos++] = buf[i];
+        }
+        if (buf[i] == '\n') {
+            line_flush(vs);
+        }
     }
 }
 
