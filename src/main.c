@@ -30,6 +30,7 @@ static void print_usage(const char *prog) {
         "  --grep <text>   Only show lines containing <text> (plain substring)\n"
         "  --realtime      Replay pcap at original wall-clock timing\n"
         "  --speed <n>     Replay at <n>x original speed (implies --realtime)\n"
+        "  --stats         Print summary stats to stderr on exit\n"
         "  --no-color      Disable colored output\n"
         "  -h, --help      Show this help\n\n"
         "Examples:\n"
@@ -64,6 +65,7 @@ int main(int argc, char *argv[]) {
     bool show_rate = false;
     const char *grep = NULL;
     double realtime_speed = 0.0;
+    bool show_stats = false;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-f") == 0 && i + 1 < argc) {
@@ -95,6 +97,8 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--speed") == 0 && i + 1 < argc) {
             realtime_speed = atof(argv[++i]);
             if (realtime_speed <= 0.0) realtime_speed = 1.0;
+        } else if (strcmp(argv[i], "--stats") == 0) {
+            show_stats = true;
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
             return 0;
@@ -137,6 +141,7 @@ int main(int argc, char *argv[]) {
     vs.hide_sync = hide_sync;
     vs.show_hex = show_hex;
     vs.show_rate = show_rate;
+    vs.show_stats = show_stats;
     if (grep) {
         strncpy(vs.grep, grep, sizeof(vs.grep) - 1);
     }
@@ -173,7 +178,11 @@ int main(int argc, char *argv[]) {
         viewer_process_udp(&vs, &pkt, work_buf, sizeof(work_buf));
     }
 
-    fprintf(stderr, "\n%llu packets decoded.\n", (unsigned long long)vs.packet_count);
+    if (vs.show_stats) {
+        viewer_print_stats(&vs);
+    } else {
+        fprintf(stderr, "\n%llu packets decoded.\n", (unsigned long long)vs.packet_count);
+    }
 
     pcap_reader_close(&reader);
     viewer_free(&vs);

@@ -16,8 +16,20 @@ typedef struct {
     uint64_t rate_last_count;
     double rate_last_time;
     bool show_rate;
+    bool show_stats;
     char grep[128];
     FILE *log_file;
+    uint64_t stat_rpc_total;
+    uint64_t stat_sync_total;
+    uint64_t stat_internal_total;
+    uint64_t stat_handshake_total;
+    uint64_t stat_query_total;
+    uint64_t stat_unknown_total;
+    uint64_t stat_bytes_c2s;
+    uint64_t stat_bytes_s2c;
+    uint32_t stat_rpc_ids[256];
+    uint64_t stat_rpc_counts[256];
+    size_t stat_rpc_unique;
     ConnectionTable connections;
 } ViewerState;
 
@@ -26,5 +38,6 @@ void viewer_free(ViewerState *vs);
 void viewer_set_color(bool enabled);
 void viewer_set_log_file(ViewerState *vs, FILE *f);
 void viewer_process_udp(ViewerState *vs, UdpPacket *pkt, uint8_t *work_buf, size_t work_size);
+void viewer_print_stats(ViewerState *vs);
 
 #endif

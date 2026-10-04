@@ -114,6 +114,20 @@ static double now_seconds(void) {
 #endif
 }
 
+static void tally_rpc(ViewerState *vs, uint32_t rpc_id) {
+    for (size_t i = 0; i < vs->stat_rpc_unique; i++) {
+        if (vs->stat_rpc_ids[i] == rpc_id) {
+            vs->stat_rpc_counts[i]++;
+            return;
+        }
+    }
+    if (vs->stat_rpc_unique < 256) {
+        vs->stat_rpc_ids[vs->stat_rpc_unique] = rpc_id;
+        vs->stat_rpc_counts[vs->stat_rpc_unique] = 1;
+        vs->stat_rpc_unique++;
+    }
+}
+
 static void maybe_print_rate(ViewerState *vs) {
     if (!vs->show_rate) return;
     double now = now_seconds();
@@ -151,6 +165,60 @@ void viewer_set_color(bool enabled) {
 
 void viewer_set_log_file(ViewerState *vs, FILE *f) {
     vs->log_file = f;
+}
+
+static int rpc_count_cmp(const void *a, const void *b) {
+    uint64_t ca = *(const uint64_t *)a;
+    uint64_t cb = *(const uint64_t *)b;
+    if (cb > ca) return 1;
+    if (cb < ca) return -1;
+    return 0;
+}
+
+void viewer_print_stats(ViewerState *vs) {
+    fprintf(stderr, "\n");
+    fprintf(stderr, "========================================================================\n");
+    fprintf(stderr, "  Session Summary\n");
+    fprintf(stderr, "========================================================================\n");
+    fprintf(stderr, "  Total decoded:    %llu\n", (unsigned long long)vs->packet_count);
+    fprintf(stderr, "  RPCs:             %llu\n", (unsigned long long)vs->stat_rpc_total);
+    fprintf(stderr, "  Sync packets:     %llu\n", (unsigned long long)vs->stat_sync_total);
+    fprintf(stderr, "  Internal:         %llu\n", (unsigned long long)vs->stat_internal_total);
+    fprintf(stderr, "  Handshake:        %llu\n", (unsigned long long)vs->stat_handshake_total);
+    fprintf(stderr, "  Query:            %llu\n", (unsigned long long)vs->stat_query_total);
+    fprintf(stderr, "  Unknown:          %llu\n", (unsigned long long)vs->stat_unknown_total);
+    fprintf(stderr, "  Bytes C->S:       %llu\n", (unsigned long long)vs->stat_bytes_c2s);
+    fprintf(stderr, "  Bytes S->C:       %llu\n", (unsigned long long)vs->stat_bytes_s2c);
+
+    size_t clients = 0;
+    for (Connection *c = vs->connections.head; c; c = c->next) clients++;
+    fprintf(stderr, "  Clients seen:     %zu\n", clients);
+
+    if (vs->stat_rpc_unique > 0) {
+        size_t pairs[256];
+        for (size_t i = 0; i < vs->stat_rpc_unique; i++) pairs[i] = i;
+        for (size_t i = 1; i < vs->stat_rpc_unique; i++) {
+            size_t key = pairs[i];
+            size_t j = i;
+            while (j > 0 && vs->stat_rpc_counts[pairs[j - 1]] < vs->stat_rpc_counts[key]) {
+                pairs[j] = pairs[j - 1];
+                j--;
+            }
+            pairs[j] = key;
+        }
+
+        fprintf(stderr, "\n  Top RPCs:\n");
+        size_t show = vs->stat_rpc_unique < 10 ? vs->stat_rpc_unique : 10;
+        for (size_t i = 0; i < show; i++) {
+            size_t idx = pairs[i];
+            fprintf(stderr, "    RPC %-4u  %llu\n",
+                    vs->stat_rpc_ids[idx],
+                    (unsigned long long)vs->stat_rpc_counts[idx]);
+        }
+    }
+    (void)rpc_count_cmp;
+    fprintf(stderr, "========================================================================\n");
+    fflush(stderr);
 }
 
 static void format_ip(uint32_t ip, char *buf, size_t buf_size) {
@@ -197,6 +265,8 @@ static void print_message(ViewerState *vs, double timestamp, PacketDirection dir
 
     switch (msg->type) {
         case MSG_RPC:
+            vs->stat_rpc_total++;
+            tally_rpc(vs, msg->rpc_id);
             if (should_filter_rpc(vs, msg->rpc_id)) return;
             out_printf(vs, "%s%s  %s%-15s  %s%-4s%s  %sRPC %-3u%s  %s%s%s",
                    c(CLR_TIME), time_str,
@@ -212,6 +282,7 @@ static void print_message(ViewerState *vs, double timestamp, PacketDirection dir
             break;
 
         case MSG_PACKET:
+            vs->stat_sync_total++;
             if (vs->hide_sync) return;
             out_printf(vs, "%s%s  %s%-15s  %s%-4s%s  %sPKT%s      %s%s%s",
                    c(CLR_TIME), time_str,
@@ -227,6 +298,7 @@ static void print_message(ViewerState *vs, double timestamp, PacketDirection dir
             break;
 
         case MSG_INTERNAL:
+            vs->stat_internal_total++;
             out_printf(vs, "%s%s  %s%-15s  %s%-4s%s  %sINT      %s%s\n",
                    c(CLR_TIME), time_str,
                    c(CLR_IP), client_ip,
@@ -235,6 +307,7 @@ static void print_message(ViewerState *vs, double timestamp, PacketDirection dir
             break;
 
         case MSG_UNKNOWN:
+            vs->stat_unknown_total++;
             out_printf(vs, "%s%s  %s%-15s  %s%-4s%s  %s???  0x%02X  %zu bytes%s",
                    c(CLR_TIME), time_str,
                    c(CLR_IP), client_ip,
@@ -261,7 +334,11 @@ static void process_reassembled(ViewerState *vs, double timestamp, PacketDirecti
 
 void viewer_process_udp(ViewerState *vs, UdpPacket *pkt, uint8_t *work_buf, size_t work_size) {
     maybe_print_rate(vs);
+    if (pkt->direction == DIR_CLIENT_TO_SERVER) vs->stat_bytes_c2s += pkt->data_len;
+    else vs->stat_bytes_s2c += pkt->data_len;
+
     if (query_is_query_packet(pkt->data, pkt->data_len)) {
+        vs->stat_query_total++;
         QueryResult qr = query_decode(pkt->data, pkt->data_len);
         char time_str[32];
         format_time(pkt->timestamp, time_str, sizeof(time_str));
@@ -333,6 +410,7 @@ void viewer_process_udp(ViewerState *vs, UdpPacket *pkt, uint8_t *work_buf, size
 
     HandshakeResult hs = handshake_check(work_buf, data_len, conn->connected);
     if (hs.type != HS_NONE) {
+        vs->stat_handshake_total++;
         char time_str[32];
         format_time(pkt->timestamp, time_str, sizeof(time_str));
         const char *dir_str = (pkt->direction == DIR_CLIENT_TO_SERVER) ? "C->S" : "S->C";
