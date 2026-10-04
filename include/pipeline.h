@@ -17,6 +17,7 @@ typedef struct {
     double rate_last_time;
     bool show_rate;
     bool show_stats;
+    bool json_output;
     char grep[128];
     FILE *log_file;
     uint64_t stat_rpc_total;

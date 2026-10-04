@@ -31,6 +31,7 @@ static void print_usage(const char *prog) {
         "  --realtime      Replay pcap at original wall-clock timing\n"
         "  --speed <n>     Replay at <n>x original speed (implies --realtime)\n"
         "  --stats         Print summary stats to stderr on exit\n"
+        "  --json          Emit one JSON object per line (machine-readable)\n"
         "  --no-color      Disable colored output\n"
         "  -h, --help      Show this help\n\n"
         "Examples:\n"
@@ -66,6 +67,7 @@ int main(int argc, char *argv[]) {
     const char *grep = NULL;
     double realtime_speed = 0.0;
     bool show_stats = false;
+    bool json_output = false;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-f") == 0 && i + 1 < argc) {
@@ -99,6 +101,8 @@ int main(int argc, char *argv[]) {
             if (realtime_speed <= 0.0) realtime_speed = 1.0;
         } else if (strcmp(argv[i], "--stats") == 0) {
             show_stats = true;
+        } else if (strcmp(argv[i], "--json") == 0) {
+            json_output = true;
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
             return 0;
@@ -142,6 +146,8 @@ int main(int argc, char *argv[]) {
     vs.show_hex = show_hex;
     vs.show_rate = show_rate;
     vs.show_stats = show_stats;
+    vs.json_output = json_output;
+    if (json_output) viewer_set_color(false);
     if (grep) {
         strncpy(vs.grep, grep, sizeof(vs.grep) - 1);
     }

@@ -236,6 +236,45 @@ static void format_time(double ts, char *buf, size_t buf_size) {
     snprintf(buf, buf_size, "%02d:%02d:%02d.%03d", hours, mins, secs, millis);
 }
 
+static void json_hex(ViewerState *vs, const uint8_t *data, size_t len) {
+    for (size_t i = 0; i < len; i++) {
+        out_printf(vs, "%02x", data[i]);
+    }
+}
+
+static void json_dir(ViewerState *vs, PacketDirection dir) {
+    out_printf(vs, dir == DIR_CLIENT_TO_SERVER ? "\"c2s\"" : "\"s2c\"");
+}
+
+static void print_message_json(ViewerState *vs, double timestamp, PacketDirection dir,
+                               const char *client_ip, const IdentifiedMessage *msg) {
+    const char *type_str = "unknown";
+    switch (msg->type) {
+        case MSG_RPC:      type_str = "rpc";      break;
+        case MSG_PACKET:   type_str = "sync";     break;
+        case MSG_INTERNAL: type_str = "internal"; break;
+        case MSG_UNKNOWN:  type_str = "unknown";  break;
+    }
+
+    if (msg->type == MSG_RPC && should_filter_rpc(vs, msg->rpc_id)) return;
+    if (msg->type == MSG_PACKET && vs->hide_sync) return;
+
+    out_printf(vs, "{\"ts\":%.6f,\"ip\":\"%s\",\"dir\":", timestamp, client_ip);
+    json_dir(vs, dir);
+    out_printf(vs, ",\"type\":\"%s\",\"id\":%u,\"name\":\"%s\",\"len\":%zu",
+               type_str,
+               msg->type == MSG_RPC ? msg->rpc_id : msg->packet_id,
+               msg->name ? msg->name : "",
+               msg->payload_len);
+    if (msg->payload_len > 0) {
+        out_printf(vs, ",\"hex\":\"");
+        json_hex(vs, msg->payload, msg->payload_len);
+        out_printf(vs, "\"");
+    }
+    out_printf(vs, "}\n");
+    out_flush(vs);
+}
+
 static void print_hex(ViewerState *vs, const uint8_t *data, size_t len, size_t max_bytes) {
     out_printf(vs, "%s", c(CLR_HEX));
     size_t show = len < max_bytes ? len : max_bytes;
@@ -256,17 +295,31 @@ static bool should_filter_rpc(ViewerState *vs, uint32_t rpc_id) {
 
 static void print_message(ViewerState *vs, double timestamp, PacketDirection dir,
                            const char *client_ip, const IdentifiedMessage *msg) {
+    vs->packet_count++;
+
+    if (msg->type == MSG_RPC) {
+        vs->stat_rpc_total++;
+        tally_rpc(vs, msg->rpc_id);
+    } else if (msg->type == MSG_PACKET) {
+        vs->stat_sync_total++;
+    } else if (msg->type == MSG_INTERNAL) {
+        vs->stat_internal_total++;
+    } else if (msg->type == MSG_UNKNOWN) {
+        vs->stat_unknown_total++;
+    }
+
+    if (vs->json_output) {
+        print_message_json(vs, timestamp, dir, client_ip, msg);
+        return;
+    }
+
     char time_str[32];
     format_time(timestamp, time_str, sizeof(time_str));
     const char *dir_str = (dir == DIR_CLIENT_TO_SERVER) ? "C->S" : "S->C";
     const char *dir_clr = (dir == DIR_CLIENT_TO_SERVER) ? CLR_C2S : CLR_S2C;
 
-    vs->packet_count++;
-
     switch (msg->type) {
         case MSG_RPC:
-            vs->stat_rpc_total++;
-            tally_rpc(vs, msg->rpc_id);
             if (should_filter_rpc(vs, msg->rpc_id)) return;
             out_printf(vs, "%s%s  %s%-15s  %s%-4s%s  %sRPC %-3u%s  %s%s%s",
                    c(CLR_TIME), time_str,
@@ -282,7 +335,6 @@ static void print_message(ViewerState *vs, double timestamp, PacketDirection dir
             break;
 
         case MSG_PACKET:
-            vs->stat_sync_total++;
             if (vs->hide_sync) return;
             out_printf(vs, "%s%s  %s%-15s  %s%-4s%s  %sPKT%s      %s%s%s",
                    c(CLR_TIME), time_str,
@@ -298,7 +350,6 @@ static void print_message(ViewerState *vs, double timestamp, PacketDirection dir
             break;
 
         case MSG_INTERNAL:
-            vs->stat_internal_total++;
             out_printf(vs, "%s%s  %s%-15s  %s%-4s%s  %sINT      %s%s\n",
                    c(CLR_TIME), time_str,
                    c(CLR_IP), client_ip,
@@ -307,7 +358,6 @@ static void print_message(ViewerState *vs, double timestamp, PacketDirection dir
             break;
 
         case MSG_UNKNOWN:
-            vs->stat_unknown_total++;
             out_printf(vs, "%s%s  %s%-15s  %s%-4s%s  %s???  0x%02X  %zu bytes%s",
                    c(CLR_TIME), time_str,
                    c(CLR_IP), client_ip,
@@ -339,15 +389,22 @@ void viewer_process_udp(ViewerState *vs, UdpPacket *pkt, uint8_t *work_buf, size
 
     if (query_is_query_packet(pkt->data, pkt->data_len)) {
         vs->stat_query_total++;
+        vs->packet_count++;
         QueryResult qr = query_decode(pkt->data, pkt->data_len);
-        char time_str[32];
-        format_time(pkt->timestamp, time_str, sizeof(time_str));
         char ip_str[32];
         uint32_t client_ip = (pkt->direction == DIR_CLIENT_TO_SERVER) ? pkt->src_ip : pkt->dst_ip;
         format_ip(client_ip, ip_str, sizeof(ip_str));
+        if (vs->json_output) {
+            out_printf(vs, "{\"ts\":%.6f,\"ip\":\"%s\",\"dir\":", pkt->timestamp, ip_str);
+            json_dir(vs, pkt->direction);
+            out_printf(vs, ",\"type\":\"query\",\"name\":\"%s\"}\n", qr.name);
+            out_flush(vs);
+            return;
+        }
+        char time_str[32];
+        format_time(pkt->timestamp, time_str, sizeof(time_str));
         const char *dir_str = (pkt->direction == DIR_CLIENT_TO_SERVER) ? "C->S" : "S->C";
         const char *dir_clr = (pkt->direction == DIR_CLIENT_TO_SERVER) ? CLR_C2S : CLR_S2C;
-        vs->packet_count++;
         out_printf(vs, "%s%s  %s%-15s  %s%-4s%s  %sQRY      %s%s\n",
                c(CLR_TIME), time_str,
                c(CLR_IP), ip_str,
@@ -391,14 +448,20 @@ void viewer_process_udp(ViewerState *vs, UdpPacket *pkt, uint8_t *work_buf, size
             if (omp_extract_key(work_buf, data_len, key)) {
                 memcpy(conn->omp_key, key, 4);
                 conn->has_omp_key = true;
-                char time_str[32];
-                format_time(pkt->timestamp, time_str, sizeof(time_str));
                 vs->packet_count++;
-                out_printf(vs, "%s%s  %s%-15s  %sS->C%s  %sOMP      KeyExchange%s\n",
-                       c(CLR_TIME), time_str,
-                       c(CLR_IP), client_ip_str,
-                       c(CLR_S2C), c(CLR_RESET),
-                       c(CLR_OMP), c(CLR_RESET));
+                if (vs->json_output) {
+                    out_printf(vs, "{\"ts\":%.6f,\"ip\":\"%s\",\"dir\":\"s2c\",\"type\":\"omp_key\",\"key\":\"%02x%02x%02x%02x\"}\n",
+                               pkt->timestamp, client_ip_str,
+                               key[0], key[1], key[2], key[3]);
+                } else {
+                    char time_str[32];
+                    format_time(pkt->timestamp, time_str, sizeof(time_str));
+                    out_printf(vs, "%s%s  %s%-15s  %sS->C%s  %sOMP      KeyExchange%s\n",
+                           c(CLR_TIME), time_str,
+                           c(CLR_IP), client_ip_str,
+                           c(CLR_S2C), c(CLR_RESET),
+                           c(CLR_OMP), c(CLR_RESET));
+                }
                 out_flush(vs);
             }
             return;
@@ -411,36 +474,52 @@ void viewer_process_udp(ViewerState *vs, UdpPacket *pkt, uint8_t *work_buf, size
     HandshakeResult hs = handshake_check(work_buf, data_len, conn->connected);
     if (hs.type != HS_NONE) {
         vs->stat_handshake_total++;
-        char time_str[32];
-        format_time(pkt->timestamp, time_str, sizeof(time_str));
-        const char *dir_str = (pkt->direction == DIR_CLIENT_TO_SERVER) ? "C->S" : "S->C";
-        const char *dir_clr = (pkt->direction == DIR_CLIENT_TO_SERVER) ? CLR_C2S : CLR_S2C;
         vs->packet_count++;
-        out_printf(vs, "%s%s  %s%-15s  %s%-4s%s  %sHSK      %s%s\n",
-               c(CLR_TIME), time_str,
-               c(CLR_IP), client_ip_str,
-               c(dir_clr), dir_str, c(CLR_RESET),
-               c(CLR_HS), hs.name, c(CLR_RESET));
+
+        if (vs->json_output) {
+            out_printf(vs, "{\"ts\":%.6f,\"ip\":\"%s\",\"dir\":", pkt->timestamp, client_ip_str);
+            json_dir(vs, pkt->direction);
+            out_printf(vs, ",\"type\":\"handshake\",\"name\":\"%s\"}\n", hs.name);
+        } else {
+            char time_str[32];
+            format_time(pkt->timestamp, time_str, sizeof(time_str));
+            const char *dir_str = (pkt->direction == DIR_CLIENT_TO_SERVER) ? "C->S" : "S->C";
+            const char *dir_clr = (pkt->direction == DIR_CLIENT_TO_SERVER) ? CLR_C2S : CLR_S2C;
+            out_printf(vs, "%s%s  %s%-15s  %s%-4s%s  %sHSK      %s%s\n",
+                   c(CLR_TIME), time_str,
+                   c(CLR_IP), client_ip_str,
+                   c(dir_clr), dir_str, c(CLR_RESET),
+                   c(CLR_HS), hs.name, c(CLR_RESET));
+        }
 
         if (hs.type == HS_CONNECTION_REQUEST_ACCEPTED || hs.type == HS_NEW_INCOMING_CONNECTION) {
             if (!conn->connected) {
                 conn->connected = true;
                 conn->connect_time = pkt->timestamp;
-                out_printf(vs, "%s         %s>>> %s connected%s\n",
-                       c(CLR_TIME),
-                       c(CLR_HS), client_ip_str, c(CLR_RESET));
+                if (vs->json_output) {
+                    out_printf(vs, "{\"ts\":%.6f,\"ip\":\"%s\",\"type\":\"connect\"}\n",
+                               pkt->timestamp, client_ip_str);
+                } else {
+                    out_printf(vs, "%s         %s>>> %s connected%s\n",
+                           c(CLR_TIME), c(CLR_HS), client_ip_str, c(CLR_RESET));
+                }
             }
         }
         if (hs.type == HS_DISCONNECTION || hs.type == HS_CONNECTION_LOST) {
             if (conn->connected) {
                 double duration = pkt->timestamp - conn->connect_time;
-                out_printf(vs, "%s         %s<<< %s disconnected  (session %.1fs, %llu pkts C->S, %llu pkts S->C)%s\n",
-                       c(CLR_TIME),
-                       c(CLR_HS), client_ip_str,
-                       duration,
-                       (unsigned long long)conn->packets_c2s,
-                       (unsigned long long)conn->packets_s2c,
-                       c(CLR_RESET));
+                if (vs->json_output) {
+                    out_printf(vs, "{\"ts\":%.6f,\"ip\":\"%s\",\"type\":\"disconnect\",\"duration\":%.3f,\"c2s_pkts\":%llu,\"s2c_pkts\":%llu}\n",
+                               pkt->timestamp, client_ip_str, duration,
+                               (unsigned long long)conn->packets_c2s,
+                               (unsigned long long)conn->packets_s2c);
+                } else {
+                    out_printf(vs, "%s         %s<<< %s disconnected  (session %.1fs, %llu pkts C->S, %llu pkts S->C)%s\n",
+                           c(CLR_TIME), c(CLR_HS), client_ip_str, duration,
+                           (unsigned long long)conn->packets_c2s,
+                           (unsigned long long)conn->packets_s2c,
+                           c(CLR_RESET));
+                }
             }
             conn->connected = false;
         }
