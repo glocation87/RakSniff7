@@ -26,6 +26,7 @@ static void print_usage(const char *prog) {
         "  --client <ip>   Only show traffic for one client IP\n"
         "  --bpf <expr>    Custom BPF filter (overrides default 'udp port N')\n"
         "  --log <path>    Mirror output to a log file (ANSI stripped)\n"
+        "  --rate          Print packet rate to stderr every ~2 seconds\n"
         "  --no-color      Disable colored output\n"
         "  -h, --help      Show this help\n\n"
         "Examples:\n"
@@ -57,6 +58,7 @@ int main(int argc, char *argv[]) {
     const char *client_filter = NULL;
     const char *bpf = NULL;
     const char *log_path = NULL;
+    bool show_rate = false;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-f") == 0 && i + 1 < argc) {
@@ -79,6 +81,8 @@ int main(int argc, char *argv[]) {
             bpf = argv[++i];
         } else if (strcmp(argv[i], "--log") == 0 && i + 1 < argc) {
             log_path = argv[++i];
+        } else if (strcmp(argv[i], "--rate") == 0) {
+            show_rate = true;
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
             return 0;
@@ -116,6 +120,7 @@ int main(int argc, char *argv[]) {
     viewer_set_color(color);
     vs.hide_sync = hide_sync;
     vs.show_hex = show_hex;
+    vs.show_rate = show_rate;
     if (rpc_filter_str) parse_rpc_filter(rpc_filter_str, &vs);
     if (client_filter) {
         strncpy(vs.client_filter, client_filter, sizeof(vs.client_filter) - 1);

@@ -13,6 +13,9 @@ typedef struct {
     size_t rpc_filter_count;
     char client_filter[64];
     uint64_t packet_count;
+    uint64_t rate_last_count;
+    double rate_last_time;
+    bool show_rate;
     FILE *log_file;
     ConnectionTable connections;
 } ViewerState;

@@ -7,6 +7,7 @@
 #include "split.h"
 #include "identify.h"
 #include <stdarg.h>
+#include <time.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -72,6 +73,39 @@ static void out_printf(ViewerState *vs, const char *fmt, ...) {
 static void out_flush(ViewerState *vs) {
     fflush(stdout);
     if (vs->log_file) fflush(vs->log_file);
+}
+
+static double now_seconds(void) {
+    struct timespec ts;
+#ifdef _WIN32
+    FILETIME ft;
+    GetSystemTimeAsFileTime(&ft);
+    uint64_t t = ((uint64_t)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+    return (double)(t - 116444736000000000ULL) / 10000000.0;
+#else
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return ts.tv_sec + ts.tv_nsec / 1e9;
+#endif
+}
+
+static void maybe_print_rate(ViewerState *vs) {
+    if (!vs->show_rate) return;
+    double now = now_seconds();
+    if (vs->rate_last_time == 0.0) {
+        vs->rate_last_time = now;
+        vs->rate_last_count = vs->packet_count;
+        return;
+    }
+    double delta = now - vs->rate_last_time;
+    if (delta < 2.0) return;
+
+    uint64_t diff = vs->packet_count - vs->rate_last_count;
+    double rate = diff / delta;
+    fprintf(stderr, "\033[90m[%.1f pkt/s, %llu total]\033[0m\n",
+            rate, (unsigned long long)vs->packet_count);
+    fflush(stderr);
+    vs->rate_last_time = now;
+    vs->rate_last_count = vs->packet_count;
 }
 
 void viewer_init(ViewerState *vs, uint16_t server_port) {
@@ -200,6 +234,7 @@ static void process_reassembled(ViewerState *vs, double timestamp, PacketDirecti
 }
 
 void viewer_process_udp(ViewerState *vs, UdpPacket *pkt, uint8_t *work_buf, size_t work_size) {
+    maybe_print_rate(vs);
     if (query_is_query_packet(pkt->data, pkt->data_len)) {
         QueryResult qr = query_decode(pkt->data, pkt->data_len);
         char time_str[32];
