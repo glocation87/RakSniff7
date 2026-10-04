@@ -11,6 +11,9 @@ typedef struct Connection {
     bool connected;
     bool has_omp_key;
     uint8_t omp_key[4];
+    double connect_time;
+    uint64_t packets_c2s;
+    uint64_t packets_s2c;
     DedupTracker dedup_c2s;
     DedupTracker dedup_s2c;
     struct Connection *next;

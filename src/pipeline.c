@@ -317,16 +317,35 @@ void viewer_process_udp(ViewerState *vs, UdpPacket *pkt, uint8_t *work_buf, size
                c(CLR_IP), client_ip_str,
                c(dir_clr), dir_str, c(CLR_RESET),
                c(CLR_HS), hs.name, c(CLR_RESET));
-        out_flush(vs);
 
         if (hs.type == HS_CONNECTION_REQUEST_ACCEPTED || hs.type == HS_NEW_INCOMING_CONNECTION) {
-            conn->connected = true;
+            if (!conn->connected) {
+                conn->connected = true;
+                conn->connect_time = pkt->timestamp;
+                out_printf(vs, "%s         %s>>> %s connected%s\n",
+                       c(CLR_TIME),
+                       c(CLR_HS), client_ip_str, c(CLR_RESET));
+            }
         }
         if (hs.type == HS_DISCONNECTION || hs.type == HS_CONNECTION_LOST) {
+            if (conn->connected) {
+                double duration = pkt->timestamp - conn->connect_time;
+                out_printf(vs, "%s         %s<<< %s disconnected  (session %.1fs, %llu pkts C->S, %llu pkts S->C)%s\n",
+                       c(CLR_TIME),
+                       c(CLR_HS), client_ip_str,
+                       duration,
+                       (unsigned long long)conn->packets_c2s,
+                       (unsigned long long)conn->packets_s2c,
+                       c(CLR_RESET));
+            }
             conn->connected = false;
         }
+        out_flush(vs);
         return;
     }
+
+    if (pkt->direction == DIR_CLIENT_TO_SERVER) conn->packets_c2s++;
+    else conn->packets_s2c++;
 
     if (!conn->connected) return;
 
