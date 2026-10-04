@@ -9,11 +9,15 @@ typedef struct {
     bool is_live;
     uint16_t server_port;
     int datalink_type;
+    double realtime_speed;
+    double first_pcap_ts;
+    double first_wall_ts;
 } PcapReader;
 
 bool pcap_reader_open_file(PcapReader *reader, const char *path, uint16_t server_port);
 bool pcap_reader_open_live(PcapReader *reader, const char *iface, uint16_t server_port, const char *bpf);
 bool pcap_reader_next(PcapReader *reader, UdpPacket *pkt, uint8_t *buf, size_t buf_size);
+void pcap_reader_set_realtime(PcapReader *reader, double speed);
 void pcap_reader_close(PcapReader *reader);
 
 #endif

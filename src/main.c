@@ -28,6 +28,8 @@ static void print_usage(const char *prog) {
         "  --log <path>    Mirror output to a log file (ANSI stripped)\n"
         "  --rate          Print packet rate to stderr every ~2 seconds\n"
         "  --grep <text>   Only show lines containing <text> (plain substring)\n"
+        "  --realtime      Replay pcap at original wall-clock timing\n"
+        "  --speed <n>     Replay at <n>x original speed (implies --realtime)\n"
         "  --no-color      Disable colored output\n"
         "  -h, --help      Show this help\n\n"
         "Examples:\n"
@@ -61,6 +63,7 @@ int main(int argc, char *argv[]) {
     const char *log_path = NULL;
     bool show_rate = false;
     const char *grep = NULL;
+    double realtime_speed = 0.0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-f") == 0 && i + 1 < argc) {
@@ -87,6 +90,11 @@ int main(int argc, char *argv[]) {
             show_rate = true;
         } else if (strcmp(argv[i], "--grep") == 0 && i + 1 < argc) {
             grep = argv[++i];
+        } else if (strcmp(argv[i], "--realtime") == 0) {
+            realtime_speed = 1.0;
+        } else if (strcmp(argv[i], "--speed") == 0 && i + 1 < argc) {
+            realtime_speed = atof(argv[++i]);
+            if (realtime_speed <= 0.0) realtime_speed = 1.0;
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
             return 0;
@@ -118,6 +126,10 @@ int main(int argc, char *argv[]) {
         ok = pcap_reader_open_live(&reader, iface, server_port, bpf);
     }
     if (!ok) return 1;
+
+    if (pcap_file && realtime_speed > 0.0) {
+        pcap_reader_set_realtime(&reader, realtime_speed);
+    }
 
     ViewerState vs;
     viewer_init(&vs, server_port);

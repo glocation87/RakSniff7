@@ -1,5 +1,34 @@
 #include "pcap_reader.h"
 
+#ifdef _WIN32
+#include <windows.h>
+static void sleep_seconds(double seconds) {
+    if (seconds <= 0) return;
+    DWORD ms = (DWORD)(seconds * 1000.0);
+    Sleep(ms);
+}
+static double wall_now(void) {
+    FILETIME ft;
+    GetSystemTimeAsFileTime(&ft);
+    uint64_t t = ((uint64_t)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+    return (double)(t - 116444736000000000ULL) / 10000000.0;
+}
+#else
+#include <time.h>
+static void sleep_seconds(double seconds) {
+    if (seconds <= 0) return;
+    struct timespec ts;
+    ts.tv_sec = (time_t)seconds;
+    ts.tv_nsec = (long)((seconds - ts.tv_sec) * 1e9);
+    nanosleep(&ts, NULL);
+}
+static double wall_now(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return ts.tv_sec + ts.tv_nsec / 1e9;
+}
+#endif
+
 bool pcap_reader_open_file(PcapReader *reader, const char *path, uint16_t server_port) {
     char errbuf[PCAP_ERRBUF_SIZE];
     reader->handle = pcap_open_offline(path, errbuf);
@@ -10,7 +39,14 @@ bool pcap_reader_open_file(PcapReader *reader, const char *path, uint16_t server
     reader->is_live = false;
     reader->server_port = server_port;
     reader->datalink_type = pcap_datalink(reader->handle);
+    reader->realtime_speed = 0.0;
+    reader->first_pcap_ts = 0.0;
+    reader->first_wall_ts = 0.0;
     return true;
+}
+
+void pcap_reader_set_realtime(PcapReader *reader, double speed) {
+    reader->realtime_speed = speed;
 }
 
 bool pcap_reader_open_live(PcapReader *reader, const char *iface, uint16_t server_port, const char *bpf) {
@@ -56,6 +92,19 @@ bool pcap_reader_next(PcapReader *reader, UdpPacket *pkt, uint8_t *buf, size_t b
     const uint8_t *raw;
 
     while (pcap_next_ex(reader->handle, &hdr, &raw) == 1) {
+        if (!reader->is_live && reader->realtime_speed > 0.0) {
+            double pcap_ts = hdr->ts.tv_sec + hdr->ts.tv_usec / 1000000.0;
+            if (reader->first_pcap_ts == 0.0) {
+                reader->first_pcap_ts = pcap_ts;
+                reader->first_wall_ts = wall_now();
+            } else {
+                double pcap_delta = (pcap_ts - reader->first_pcap_ts) / reader->realtime_speed;
+                double target_wall = reader->first_wall_ts + pcap_delta;
+                double now = wall_now();
+                sleep_seconds(target_wall - now);
+            }
+        }
+
         size_t link_len = link_header_len(reader->datalink_type);
         if (hdr->caplen < link_len + 20) continue;  // too short for IP header
 
