@@ -6,6 +6,7 @@
 #include "raknet.h"
 #include "split.h"
 #include "identify.h"
+#include "decode.h"
 #include <stdarg.h>
 #include <time.h>
 
@@ -266,7 +267,11 @@ static void print_message_json(ViewerState *vs, double timestamp, PacketDirectio
                msg->type == MSG_RPC ? msg->rpc_id : msg->packet_id,
                msg->name ? msg->name : "",
                msg->payload_len);
-    if (msg->payload_len > 0) {
+
+    char fields[1024];
+    if (msg->type == MSG_RPC && decode_rpc_fields_json(msg, dir, fields, sizeof(fields))) {
+        out_printf(vs, ",%s", fields);
+    } else if (msg->payload_len > 0) {
         out_printf(vs, ",\"hex\":\"");
         json_hex(vs, msg->payload, msg->payload_len);
         out_printf(vs, "\"");
@@ -319,7 +324,7 @@ static void print_message(ViewerState *vs, double timestamp, PacketDirection dir
     const char *dir_clr = (dir == DIR_CLIENT_TO_SERVER) ? CLR_C2S : CLR_S2C;
 
     switch (msg->type) {
-        case MSG_RPC:
+        case MSG_RPC: {
             if (should_filter_rpc(vs, msg->rpc_id)) return;
             out_printf(vs, "%s%s  %s%-15s  %s%-4s%s  %sRPC %-3u%s  %s%s%s",
                    c(CLR_TIME), time_str,
@@ -327,12 +332,23 @@ static void print_message(ViewerState *vs, double timestamp, PacketDirection dir
                    c(dir_clr), dir_str, c(CLR_RESET),
                    c(CLR_RPC), msg->rpc_id, c(CLR_RESET),
                    c(CLR_NAME), msg->name, c(CLR_RESET));
+
+            char fields[1024];
+            bool decoded = decode_rpc_fields(msg, dir, fields, sizeof(fields));
+            if (decoded) {
+                out_printf(vs, "  %s{%s%s%s}%s",
+                           c(CLR_HEX), c(CLR_RESET),
+                           fields,
+                           c(CLR_HEX), c(CLR_RESET));
+            }
+
             if (vs->show_hex && msg->payload_len > 0) {
                 out_printf(vs, "  ");
                 print_hex(vs, msg->payload, msg->payload_len, 32);
             }
             out_printf(vs, "\n");
             break;
+        }
 
         case MSG_PACKET:
             if (vs->hide_sync) return;

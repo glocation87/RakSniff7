@@ -27,6 +27,7 @@ add_executable(omp_packet_viewer
     src/identify.c
     src/connection.c
     src/pipeline.c
+    src/decode.c
 )
 
 target_include_directories(omp_packet_viewer PRIVATE
