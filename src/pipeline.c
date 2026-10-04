@@ -6,6 +6,7 @@
 #include "raknet.h"
 #include "split.h"
 #include "identify.h"
+#include <stdarg.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -40,6 +41,39 @@ static const char *c(const char *code) {
     return use_color ? code : "";
 }
 
+static void strip_ansi(const char *in, char *out, size_t out_size) {
+    size_t j = 0;
+    for (size_t i = 0; in[i] && j + 1 < out_size; i++) {
+        if (in[i] == '\033' && in[i + 1] == '[') {
+            i += 2;
+            while (in[i] && in[i] != 'm') i++;
+            continue;
+        }
+        out[j++] = in[i];
+    }
+    out[j] = '\0';
+}
+
+static void out_printf(ViewerState *vs, const char *fmt, ...) {
+    char buf[2048];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+
+    fputs(buf, stdout);
+    if (vs->log_file) {
+        char plain[2048];
+        strip_ansi(buf, plain, sizeof(plain));
+        fputs(plain, vs->log_file);
+    }
+}
+
+static void out_flush(ViewerState *vs) {
+    fflush(stdout);
+    if (vs->log_file) fflush(vs->log_file);
+}
+
 void viewer_init(ViewerState *vs, uint16_t server_port) {
     memset(vs, 0, sizeof(*vs));
     vs->server_port = server_port;
@@ -53,6 +87,10 @@ void viewer_free(ViewerState *vs) {
 
 void viewer_set_color(bool enabled) {
     use_color = enabled;
+}
+
+void viewer_set_log_file(ViewerState *vs, FILE *f) {
+    vs->log_file = f;
 }
 
 static void format_ip(uint32_t ip, char *buf, size_t buf_size) {
@@ -70,14 +108,14 @@ static void format_time(double ts, char *buf, size_t buf_size) {
     snprintf(buf, buf_size, "%02d:%02d:%02d.%03d", hours, mins, secs, millis);
 }
 
-static void print_hex(const uint8_t *data, size_t len, size_t max_bytes) {
-    printf("%s", c(CLR_HEX));
+static void print_hex(ViewerState *vs, const uint8_t *data, size_t len, size_t max_bytes) {
+    out_printf(vs, "%s", c(CLR_HEX));
     size_t show = len < max_bytes ? len : max_bytes;
     for (size_t i = 0; i < show; i++) {
-        printf("%02X ", data[i]);
+        out_printf(vs, "%02X ", data[i]);
     }
-    if (len > max_bytes) printf("...");
-    printf("%s", c(CLR_RESET));
+    if (len > max_bytes) out_printf(vs, "...");
+    out_printf(vs, "%s", c(CLR_RESET));
 }
 
 static bool should_filter_rpc(ViewerState *vs, uint32_t rpc_id) {
@@ -100,36 +138,36 @@ static void print_message(ViewerState *vs, double timestamp, PacketDirection dir
     switch (msg->type) {
         case MSG_RPC:
             if (should_filter_rpc(vs, msg->rpc_id)) return;
-            printf("%s%s  %s%-15s  %s%-4s%s  %sRPC %-3u%s  %s%s%s",
+            out_printf(vs, "%s%s  %s%-15s  %s%-4s%s  %sRPC %-3u%s  %s%s%s",
                    c(CLR_TIME), time_str,
                    c(CLR_IP), client_ip,
                    c(dir_clr), dir_str, c(CLR_RESET),
                    c(CLR_RPC), msg->rpc_id, c(CLR_RESET),
                    c(CLR_NAME), msg->name, c(CLR_RESET));
             if (vs->show_hex && msg->payload_len > 0) {
-                printf("  ");
-                print_hex(msg->payload, msg->payload_len, 32);
+                out_printf(vs, "  ");
+                print_hex(vs, msg->payload, msg->payload_len, 32);
             }
-            printf("\n");
+            out_printf(vs, "\n");
             break;
 
         case MSG_PACKET:
             if (vs->hide_sync) return;
-            printf("%s%s  %s%-15s  %s%-4s%s  %sPKT%s      %s%s%s",
+            out_printf(vs, "%s%s  %s%-15s  %s%-4s%s  %sPKT%s      %s%s%s",
                    c(CLR_TIME), time_str,
                    c(CLR_IP), client_ip,
                    c(dir_clr), dir_str, c(CLR_RESET),
                    c(CLR_SYNC), c(CLR_RESET),
                    c(CLR_SYNC), msg->name, c(CLR_RESET));
             if (vs->show_hex && msg->payload_len > 0) {
-                printf("  ");
-                print_hex(msg->payload, msg->payload_len, 16);
+                out_printf(vs, "  ");
+                print_hex(vs, msg->payload, msg->payload_len, 16);
             }
-            printf("\n");
+            out_printf(vs, "\n");
             break;
 
         case MSG_INTERNAL:
-            printf("%s%s  %s%-15s  %s%-4s%s  %sINT      %s%s\n",
+            out_printf(vs, "%s%s  %s%-15s  %s%-4s%s  %sINT      %s%s\n",
                    c(CLR_TIME), time_str,
                    c(CLR_IP), client_ip,
                    c(dir_clr), dir_str, c(CLR_RESET),
@@ -137,19 +175,19 @@ static void print_message(ViewerState *vs, double timestamp, PacketDirection dir
             break;
 
         case MSG_UNKNOWN:
-            printf("%s%s  %s%-15s  %s%-4s%s  %s???  0x%02X  %zu bytes%s",
+            out_printf(vs, "%s%s  %s%-15s  %s%-4s%s  %s???  0x%02X  %zu bytes%s",
                    c(CLR_TIME), time_str,
                    c(CLR_IP), client_ip,
                    c(dir_clr), dir_str, c(CLR_RESET),
                    c(CLR_UNK), msg->packet_id, msg->payload_len, c(CLR_RESET));
             if (vs->show_hex && msg->payload_len > 0) {
-                printf("  ");
-                print_hex(msg->payload, msg->payload_len, 16);
+                out_printf(vs, "  ");
+                print_hex(vs, msg->payload, msg->payload_len, 16);
             }
-            printf("\n");
+            out_printf(vs, "\n");
             break;
     }
-    fflush(stdout);
+    out_flush(vs);
 }
 
 static void process_reassembled(ViewerState *vs, double timestamp, PacketDirection dir,
@@ -172,12 +210,12 @@ void viewer_process_udp(ViewerState *vs, UdpPacket *pkt, uint8_t *work_buf, size
         const char *dir_str = (pkt->direction == DIR_CLIENT_TO_SERVER) ? "C->S" : "S->C";
         const char *dir_clr = (pkt->direction == DIR_CLIENT_TO_SERVER) ? CLR_C2S : CLR_S2C;
         vs->packet_count++;
-        printf("%s%s  %s%-15s  %s%-4s%s  %sQRY      %s%s\n",
+        out_printf(vs, "%s%s  %s%-15s  %s%-4s%s  %sQRY      %s%s\n",
                c(CLR_TIME), time_str,
                c(CLR_IP), ip_str,
                c(dir_clr), dir_str, c(CLR_RESET),
                c(CLR_QUERY), qr.name, c(CLR_RESET));
-        fflush(stdout);
+        out_flush(vs);
         return;
     }
 
@@ -218,12 +256,12 @@ void viewer_process_udp(ViewerState *vs, UdpPacket *pkt, uint8_t *work_buf, size
                 char time_str[32];
                 format_time(pkt->timestamp, time_str, sizeof(time_str));
                 vs->packet_count++;
-                printf("%s%s  %s%-15s  %sS->C%s  %sOMP      KeyExchange%s\n",
+                out_printf(vs, "%s%s  %s%-15s  %sS->C%s  %sOMP      KeyExchange%s\n",
                        c(CLR_TIME), time_str,
                        c(CLR_IP), client_ip_str,
                        c(CLR_S2C), c(CLR_RESET),
                        c(CLR_OMP), c(CLR_RESET));
-                fflush(stdout);
+                out_flush(vs);
             }
             return;
         }
@@ -239,12 +277,12 @@ void viewer_process_udp(ViewerState *vs, UdpPacket *pkt, uint8_t *work_buf, size
         const char *dir_str = (pkt->direction == DIR_CLIENT_TO_SERVER) ? "C->S" : "S->C";
         const char *dir_clr = (pkt->direction == DIR_CLIENT_TO_SERVER) ? CLR_C2S : CLR_S2C;
         vs->packet_count++;
-        printf("%s%s  %s%-15s  %s%-4s%s  %sHSK      %s%s\n",
+        out_printf(vs, "%s%s  %s%-15s  %s%-4s%s  %sHSK      %s%s\n",
                c(CLR_TIME), time_str,
                c(CLR_IP), client_ip_str,
                c(dir_clr), dir_str, c(CLR_RESET),
                c(CLR_HS), hs.name, c(CLR_RESET));
-        fflush(stdout);
+        out_flush(vs);
 
         if (hs.type == HS_CONNECTION_REQUEST_ACCEPTED || hs.type == HS_NEW_INCOMING_CONNECTION) {
             conn->connected = true;

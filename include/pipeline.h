@@ -13,12 +13,14 @@ typedef struct {
     size_t rpc_filter_count;
     char client_filter[64];
     uint64_t packet_count;
+    FILE *log_file;
     ConnectionTable connections;
 } ViewerState;
 
 void viewer_init(ViewerState *vs, uint16_t server_port);
 void viewer_free(ViewerState *vs);
 void viewer_set_color(bool enabled);
+void viewer_set_log_file(ViewerState *vs, FILE *f);
 void viewer_process_udp(ViewerState *vs, UdpPacket *pkt, uint8_t *work_buf, size_t work_size);
 
 #endif

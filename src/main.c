@@ -25,6 +25,7 @@ static void print_usage(const char *prog) {
         "  --rpc <ids>     Only show these RPC IDs (comma-separated, e.g. 25,128)\n"
         "  --client <ip>   Only show traffic for one client IP\n"
         "  --bpf <expr>    Custom BPF filter (overrides default 'udp port N')\n"
+        "  --log <path>    Mirror output to a log file (ANSI stripped)\n"
         "  --no-color      Disable colored output\n"
         "  -h, --help      Show this help\n\n"
         "Examples:\n"
@@ -55,6 +56,7 @@ int main(int argc, char *argv[]) {
     const char *rpc_filter_str = NULL;
     const char *client_filter = NULL;
     const char *bpf = NULL;
+    const char *log_path = NULL;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-f") == 0 && i + 1 < argc) {
@@ -75,6 +77,8 @@ int main(int argc, char *argv[]) {
             client_filter = argv[++i];
         } else if (strcmp(argv[i], "--bpf") == 0 && i + 1 < argc) {
             bpf = argv[++i];
+        } else if (strcmp(argv[i], "--log") == 0 && i + 1 < argc) {
+            log_path = argv[++i];
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
             return 0;
@@ -117,6 +121,16 @@ int main(int argc, char *argv[]) {
         strncpy(vs.client_filter, client_filter, sizeof(vs.client_filter) - 1);
     }
 
+    FILE *log_file = NULL;
+    if (log_path) {
+        log_file = fopen(log_path, "w");
+        if (!log_file) {
+            fprintf(stderr, "warning: could not open log file %s\n", log_path);
+        } else {
+            viewer_set_log_file(&vs, log_file);
+        }
+    }
+
     fprintf(stderr, "omp-packet-viewer | port %u", server_port);
     if (pcap_file) fprintf(stderr, " | reading %s", pcap_file);
     if (iface)     fprintf(stderr, " | live on %s", iface);
@@ -139,6 +153,7 @@ int main(int argc, char *argv[]) {
 
     pcap_reader_close(&reader);
     viewer_free(&vs);
+    if (log_file) fclose(log_file);
 
 #ifdef _WIN32
     WSACleanup();
