@@ -24,6 +24,7 @@ static void print_usage(const char *prog) {
         "  --hex           Print hex dump of each payload\n"
         "  --rpc <ids>     Only show these RPC IDs (comma-separated, e.g. 25,128)\n"
         "  --client <ip>   Only show traffic for one client IP\n"
+        "  --bpf <expr>    Custom BPF filter (overrides default 'udp port N')\n"
         "  --no-color      Disable colored output\n"
         "  -h, --help      Show this help\n\n"
         "Examples:\n"
@@ -53,6 +54,7 @@ int main(int argc, char *argv[]) {
     bool color = true;
     const char *rpc_filter_str = NULL;
     const char *client_filter = NULL;
+    const char *bpf = NULL;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-f") == 0 && i + 1 < argc) {
@@ -71,6 +73,8 @@ int main(int argc, char *argv[]) {
             rpc_filter_str = argv[++i];
         } else if (strcmp(argv[i], "--client") == 0 && i + 1 < argc) {
             client_filter = argv[++i];
+        } else if (strcmp(argv[i], "--bpf") == 0 && i + 1 < argc) {
+            bpf = argv[++i];
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
             return 0;
@@ -99,7 +103,7 @@ int main(int argc, char *argv[]) {
     if (pcap_file) {
         ok = pcap_reader_open_file(&reader, pcap_file, server_port);
     } else {
-        ok = pcap_reader_open_live(&reader, iface, server_port);
+        ok = pcap_reader_open_live(&reader, iface, server_port, bpf);
     }
     if (!ok) return 1;
 

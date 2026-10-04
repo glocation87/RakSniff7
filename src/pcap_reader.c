@@ -13,7 +13,7 @@ bool pcap_reader_open_file(PcapReader *reader, const char *path, uint16_t server
     return true;
 }
 
-bool pcap_reader_open_live(PcapReader *reader, const char *iface, uint16_t server_port) {
+bool pcap_reader_open_live(PcapReader *reader, const char *iface, uint16_t server_port, const char *bpf) {
     char errbuf[PCAP_ERRBUF_SIZE];
     reader->handle = pcap_open_live(iface, 65535, 1, 1000, errbuf);
     if (!reader->handle) {
@@ -24,12 +24,18 @@ bool pcap_reader_open_live(PcapReader *reader, const char *iface, uint16_t serve
     reader->server_port = server_port;
     reader->datalink_type = pcap_datalink(reader->handle);
 
-    char filter_str[64];
-    snprintf(filter_str, sizeof(filter_str), "udp port %u", server_port);
+    char filter_str[512];
+    if (bpf && bpf[0]) {
+        snprintf(filter_str, sizeof(filter_str), "%s", bpf);
+    } else {
+        snprintf(filter_str, sizeof(filter_str), "udp port %u", server_port);
+    }
     struct bpf_program fp;
     if (pcap_compile(reader->handle, &fp, filter_str, 1, PCAP_NETMASK_UNKNOWN) == 0) {
         pcap_setfilter(reader->handle, &fp);
         pcap_freecode(&fp);
+    } else {
+        fprintf(stderr, "warning: failed to compile BPF filter: %s\n", pcap_geterr(reader->handle));
     }
     return true;
 }
